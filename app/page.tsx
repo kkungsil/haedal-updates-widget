@@ -20,6 +20,20 @@ type ApiResponse = {
 const fetcher = (u: string) => fetch(u).then((r) => r.json());
 
 export default function Home() {
+  function isTodayInSeoul(iso: string) {
+    const now = new Date();
+    const d = new Date(iso);
+
+    const fmt = new Intl.DateTimeFormat("ko-KR", {
+      timeZone: "Asia/Seoul",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+
+    return fmt.format(now) === fmt.format(d);
+  }
+
   const { data, isLoading } = useSWR<ApiResponse>("/api/updates", fetcher, {
     refreshInterval: 60_000,
   });
@@ -58,7 +72,7 @@ export default function Home() {
       flexDirection: "column",
       gap: 6,
     },
-    row: {
+    rowBase: {
       display: "flex",
       alignItems: "center",
       justifyContent: "space-between",
@@ -115,30 +129,42 @@ export default function Home() {
       )}
 
       <div style={styles.list}>
-        {(data?.items || []).map((it) => (
-          <a
-            key={it.url}
-            href={it.url}
-            target="_blank"
-            rel="noreferrer"
-            style={styles.row}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLAnchorElement).style.background = "#f7f7f7";
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLAnchorElement).style.background = "#fff";
-            }}
-          >
-            <div style={styles.left}>
-              <div style={styles.icon}>{it.iconEmoji || "📄"}</div>
-              <div style={styles.text}>{it.title}</div>
-            </div>
+        {(data?.items || []).map((it) => {
+          const today = isTodayInSeoul(it.lastEditedTime);
+          const rowStyle: React.CSSProperties = {
+            ...styles.rowBase,
+            background: today ? "#fff9db" : (styles.rowBase.background as string),
+          };
 
-            <div style={styles.date}>
-              {formatKoreanMonthDay(it.lastEditedTime)}
-            </div>
-          </a>
-        ))}
+          return (
+            <a
+              key={it.url}
+              href={it.url}
+              target="_blank"
+              rel="noreferrer"
+              style={rowStyle}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLAnchorElement).style.background = today
+                  ? "#fff3bf"
+                  : "#f7f7f7";
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLAnchorElement).style.background = today
+                  ? "#fff9db"
+                  : "#fff";
+              }}
+            >
+              <div style={styles.left}>
+                <div style={styles.icon}>{it.iconEmoji || "📄"}</div>
+                <div style={styles.text}>{it.title}</div>
+              </div>
+
+              <div style={styles.date}>
+                {formatKoreanMonthDay(it.lastEditedTime)}
+              </div>
+            </a>
+          );
+        })}
       </div>
     </main>
   );

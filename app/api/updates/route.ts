@@ -1,11 +1,8 @@
 import { NextResponse } from "next/server";
-import { HAEDAL_SNAPSHOT_PAGE_URLS } from "../../../data/haedalSnapshot";
 import {
-  fetchAllDbUpdates,
-  fetchSnapshotUpdates,
+  fetchAllUpdates,
   fetchExcludedDbIds,
   fetchIconMap,
-  UpdateItem,
 } from "../../../lib/notion";
 
 const EXCLUDE_DB_ID = process.env.WIDGET_EXCLUDE_DB_ID || "";
@@ -19,21 +16,19 @@ async function fetchFresh() {
     fetchIconMap(ICON_MAP_DB_ID),
   ]);
 
-  const [dbItems, snapshotItems] = await Promise.all([
-    fetchAllDbUpdates(excludedIds, iconMap),
-    fetchSnapshotUpdates(HAEDAL_SNAPSHOT_PAGE_URLS),
-  ]);
+  // 관리용 DB는 항상 제외
+  if (EXCLUDE_DB_ID) excludedIds.dbIds.add(EXCLUDE_DB_ID.replace(/-/g, ""));
+  if (ICON_MAP_DB_ID) excludedIds.dbIds.add(ICON_MAP_DB_ID.replace(/-/g, ""));
 
-  const combined: UpdateItem[] = [...dbItems, ...snapshotItems].sort(
-    (a, b) => (a.lastEditedTime < b.lastEditedTime ? 1 : -1)
-  );
+  const { items, hiddenItems } = await fetchAllUpdates(excludedIds, iconMap);
 
   return {
     ok: true,
     refreshedAt: new Date().toISOString(),
-    count: combined.length,
-    sources: { db: dbItems.length, snapshot: snapshotItems.length },
-    items: combined,
+    count: items.length,
+    sources: { total: items.length, hidden: hiddenItems.length },
+    items,
+    hiddenItems,
   };
 }
 

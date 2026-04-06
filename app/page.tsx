@@ -112,7 +112,7 @@ export default function Home() {
   return (
     <main style={styles.main}>
       <div style={styles.header}>
-        <div style={styles.title}>🦦 해달집 최근 업데이트</div>
+        <div style={styles.title}>🦦 최근 업데이트된 해달집</div>
         <div style={styles.subtitle}>TOP 10</div>
       </div>
 

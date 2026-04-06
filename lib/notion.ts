@@ -142,11 +142,7 @@ export async function fetchAllUpdates(
 
  for (const page of resp.results || []) {
   const parent = page.parent;
-  const title = Object.values(page.properties || {}).find((p: any) => p?.type === "title");
-  const titleText = title ? (title as any).title?.map((t: any) => t.plain_text).join("") : "(flat)";
-  if (titleText?.includes("꿍실") || titleText?.includes("테스트에유") || titleText === "(flat)") {
-    console.log("DEBUG page:", titleText, "parent.type:", parent?.type, "parent:", JSON.stringify(parent));
-  }
+  
 
   // DB 안 페이지
   let dbId: string | null = null;

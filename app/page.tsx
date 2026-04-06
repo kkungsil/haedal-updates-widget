@@ -1,7 +1,7 @@
 "use client";
 
 import useSWR from "swr";
-import { formatKoreanMonthDay } from "../lib/date";
+import { formatKoreanMonthDayTime } from "../lib/date";
 
 type UpdateItem = {
   title: string;
@@ -160,7 +160,7 @@ export default function Home() {
               </div>
 
               <div style={styles.date}>
-                {formatKoreanMonthDay(it.lastEditedTime)}
+                {formatKoreanMonthDayTime(it.lastEditedTime)}
               </div>
             </a>
           );

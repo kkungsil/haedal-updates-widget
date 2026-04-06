@@ -128,5 +128,5 @@ export async function fetchSnapshotUpdates(pageIds: string[]): Promise<UpdateIte
       };
     })
   );
-  return settled.filter((r): r is PromiseFulfilledResult<UpdateItem> => r.status === "fulfilled").map((r) => r.value);
+  return settled.filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled").map((r) => r.value);
 }

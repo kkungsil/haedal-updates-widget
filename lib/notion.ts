@@ -23,14 +23,12 @@ function parseEmojiIcon(icon: any): string | undefined {
 
 function extractItemTitle(page: any): string {
   const props = page?.properties || {};
-  // typed format (from search API)
   for (const key of Object.keys(props)) {
     const p = props[key];
     if (p?.type === "title") {
       return (p.title || []).map((x: any) => x.plain_text).join("") || "";
     }
   }
-  // flat format (from dataSources.query / pages.retrieve)
   for (const key of Object.keys(props)) {
     const val = props[key];
     if (
@@ -53,7 +51,6 @@ function extractDbTitle(db: any): string {
 function readFlatProp(row: any, key: string): string {
   const val = row?.properties?.[key];
   if (typeof val === "string") return val;
-  // typed rich_text format
   if (Array.isArray(val?.rich_text)) {
     return val.rich_text.map((t: any) => t.plain_text || "").join("");
   }
@@ -66,6 +63,17 @@ function readFlatProp(row: any, key: string): string {
 function isFlatCheckboxTrue(row: any, key: string): boolean {
   const val = row?.properties?.[key];
   return val === "__YES__" || val === true || val?.checkbox === true;
+}
+
+function isCreatedTodaySeoul(createdTime: string): boolean {
+  const now = new Date();
+  const todaySeoul = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
+  const createdSeoul = new Date(new Date(createdTime).toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
+  return (
+    todaySeoul.getFullYear() === createdSeoul.getFullYear() &&
+    todaySeoul.getMonth() === createdSeoul.getMonth() &&
+    todaySeoul.getDate() === createdSeoul.getDate()
+  );
 }
 
 export async function fetchExcludedDbIds(excludeDbId: string): Promise<ExcludeSet> {
@@ -84,7 +92,6 @@ export async function fetchExcludedDbIds(excludeDbId: string): Promise<ExcludeSe
     }
   } catch (e) { console.error("Failed to load exclude list:", e); }
 
-  // 제외 DB 안의 페이지 ID도 수집 (하위 페이지 제외용)
   await Promise.allSettled(
     Array.from(dbIds).map(async (dbId) => {
       try {
@@ -120,10 +127,10 @@ export async function fetchIconMap(iconMapDbId: string): Promise<Map<string, str
   return map;
 }
 
-export async function fetchAllDbUpdates(
+export async function fetchAllUpdates(
   excludedIds: ExcludeSet,
   iconMap: Map<string, string>
-): Promise<UpdateItem[]> {
+): Promise<{ items: UpdateItem[]; hiddenItems: UpdateItem[] }> {
   const resp: any = await (notion as any).search({
     filter: { value: "page", property: "object" },
     sort: { direction: "descending", timestamp: "last_edited_time" },
@@ -131,22 +138,47 @@ export async function fetchAllDbUpdates(
   });
 
   const dbMap = new Map<string, any>();
-  for (const page of resp.results || []) {
-    const parent = page.parent;
-    let dbId: string | null = null;
+  const standalonePages: any[] = [];
+
+ for (const page of resp.results || []) {
+  const parent = page.parent;
+  const title = Object.values(page.properties || {}).find((p: any) => p?.type === "title");
+  const titleText = title ? (title as any).title?.map((t: any) => t.plain_text).join("") : "(flat)";
+  if (titleText?.includes("꿍실") || titleText?.includes("테스트에유") || titleText === "(flat)") {
+    console.log("DEBUG page:", titleText, "parent.type:", parent?.type, "parent:", JSON.stringify(parent));
+  }
+
+  // DB 안 페이지
+  let dbId: string | null = null;
     if (parent?.type === "database_id") {
       dbId = (parent.database_id || "").replace(/-/g, "");
     } else if (parent?.type === "data_source" || parent?.type === "data_source_id") {
       dbId = (parent.database_id || parent.data_source_id || "").replace(/-/g, "");
     }
-    if (!dbId || dbId.length < 32) continue;
-    if (excludedIds.dbIds.has(dbId)) continue;
-    const pageParentId = (parent?.page_id || "").replace(/-/g, "");
-    if (pageParentId && excludedIds.pageIds.has(pageParentId)) continue;
-    if (!dbMap.has(dbId)) dbMap.set(dbId, page);
+
+    if (dbId && dbId.length >= 32) {
+      if (!excludedIds.dbIds.has(dbId) && !dbMap.has(dbId)) {
+        dbMap.set(dbId, page);
+      }
+      continue;
+    }
+
+    // 독립 페이지 (페이지 안 또는 워크스페이스 최상위)
+    const parentType = parent?.type;
+if (
+  parentType === "page_id" ||
+  parentType === "page" ||
+  parentType === "block_id" ||
+  parentType === "workspace"
+) {
+  const parentPageId = (parent?.page_id || parent?.block_id || parent?.id || "").replace(/-/g, "");
+      if (parentPageId && excludedIds.pageIds.has(parentPageId)) continue;
+      standalonePages.push(page);
+    }
   }
 
-  const results: UpdateItem[] = [];
+  // DB 아이템 빌드
+  const dbItems: UpdateItem[] = [];
   await Promise.allSettled(
     Array.from(dbMap.entries()).map(async ([dbId, page]) => {
       try {
@@ -154,7 +186,7 @@ export async function fetchAllDbUpdates(
         const itemTitle = extractItemTitle(page);
         const isNew = page.created_time === page.last_edited_time;
         const action = itemTitle ? `${itemTitle} ${isNew ? "작성" : "수정"}` : "내용 업데이트";
-        results.push({
+        dbItems.push({
           entityId: dbId,
           entityType: "db",
           title: `${extractDbTitle(db)} - ${action}`,
@@ -165,57 +197,55 @@ export async function fetchAllDbUpdates(
       } catch (_) {}
     })
   );
-  return results;
-}
 
-export async function fetchHiddenDbUpdates(
-  excludedIds: ExcludeSet,
-  iconMap: Map<string, string>
-): Promise<UpdateItem[]> {
-  if (excludedIds.dbIds.size === 0) return [];
+  // 독립 페이지 아이템 빌드 (오늘 생성이면 "새 페이지 등장")
+  const pageItems: UpdateItem[] = standalonePages.map((page) => {
+    const itemTitle = extractItemTitle(page);
+    const createdToday = isCreatedTodaySeoul(page.created_time);
+    const label = createdToday ? "새 페이지 등장" : "페이지 수정";
+    const pageId = (page.id || "").replace(/-/g, "");
+    return {
+      entityId: pageId,
+      entityType: "page" as const,
+      title: `${itemTitle || "(페이지)"} - ${label}`,
+      url: page.url,
+      iconEmoji: parseEmojiIcon(page.icon),
+      lastEditedTime: page.last_edited_time,
+    };
+  });
 
-  const results: UpdateItem[] = [];
-  await Promise.allSettled(
-    Array.from(excludedIds.dbIds).map(async (dbId) => {
-      try {
-        const db: any = await (notion as any).databases.retrieve({ database_id: dbId });
-        const dsId = db?.data_sources?.[0]?.id || db?.data_sources?.[0]?.data_source?.id;
-        if (!dsId) return;
-        const resp: any = await (notion as any).dataSources.query({ data_source_id: dsId, page_size: 5 });
-        for (const page of resp.results || []) {
-          const itemTitle = extractItemTitle(page);
-          const isNew = page.created_time === page.last_edited_time;
-          const action = itemTitle ? `${itemTitle} ${isNew ? "작성" : "수정"}` : "내용 업데이트";
-          results.push({
-            entityId: (page.id || "").replace(/-/g, ""),
-            entityType: "db",
-            title: `${extractDbTitle(db)} - ${action}`,
-            url: page.url,
-            iconEmoji: iconMap.get(dbId) || parseEmojiIcon(db.icon),
-            lastEditedTime: page.last_edited_time,
-          });
-        }
-      } catch (_) {}
-    })
+  // 숨김 아이템
+  const hiddenItems: UpdateItem[] = [];
+  if (excludedIds.dbIds.size > 0) {
+    await Promise.allSettled(
+      Array.from(excludedIds.dbIds).map(async (dbId) => {
+        try {
+          const db: any = await (notion as any).databases.retrieve({ database_id: dbId });
+          const dsId = db?.data_sources?.[0]?.id || db?.data_sources?.[0]?.data_source?.id;
+          if (!dsId) return;
+          const resp2: any = await (notion as any).dataSources.query({ data_source_id: dsId, page_size: 5 });
+          for (const page of resp2.results || []) {
+            const itemTitle = extractItemTitle(page);
+            const isNew = page.created_time === page.last_edited_time;
+            const action = itemTitle ? `${itemTitle} ${isNew ? "작성" : "수정"}` : "내용 업데이트";
+            hiddenItems.push({
+              entityId: (page.id || "").replace(/-/g, ""),
+              entityType: "db",
+              title: `${extractDbTitle(db)} - ${action}`,
+              url: page.url,
+              iconEmoji: iconMap.get(dbId) || parseEmojiIcon(db.icon),
+              lastEditedTime: page.last_edited_time,
+            });
+          }
+        } catch (_) {}
+      })
+    );
+  }
+
+  const items = [...dbItems, ...pageItems].sort(
+    (a, b) => (a.lastEditedTime < b.lastEditedTime ? 1 : -1)
   );
-  return results.sort((a, b) => (a.lastEditedTime < b.lastEditedTime ? 1 : -1));
-}
+  hiddenItems.sort((a, b) => (a.lastEditedTime < b.lastEditedTime ? 1 : -1));
 
-export async function fetchSnapshotUpdates(pageIds: string[]): Promise<UpdateItem[]> {
-  const settled = await Promise.allSettled(
-    pageIds.map(async (page_id) => {
-      const page: any = await (notion as any).pages.retrieve({ page_id });
-      const itemTitle = extractItemTitle(page);
-      const isNew = page.created_time === page.last_edited_time;
-      return {
-        entityId: (page.id || "").replace(/-/g, ""),
-        entityType: "page" as const,
-        title: `${itemTitle || "(페이지)"} - ${isNew ? "페이지 추가" : "페이지 수정"}`,
-        url: page.url,
-        iconEmoji: parseEmojiIcon(page.icon),
-        lastEditedTime: page.last_edited_time,
-      };
-    })
-  );
-  return settled.filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled").map((r) => r.value);
+  return { items, hiddenItems };
 }
